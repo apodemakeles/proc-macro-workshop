@@ -51,10 +51,10 @@ fn build_check_macro(data: &Data) -> TokenStream{
 
                 let name = &f.ident;
                 quote! {
-                if self.#name.is_none(){
-                    return std::result::Result::Err(format!("{} missing", stringify!(#name)).into());
+                    if self.#name.is_none(){
+                        return std::result::Result::Err(format!("{} missing", stringify!(#name)).into());
+                    }
                 }
-            }
             });
         quote! {
             #(#items)*
