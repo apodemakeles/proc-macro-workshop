@@ -1,21 +1,33 @@
-use proc_macro2::Ident;
+use proc_macro2::{Ident, TokenStream};
 use syn::parse::{Parse, ParseStream};
-use syn::{Expr, LitInt, parse_macro_input, Token};
+use syn::{braced, Expr, LitInt, parse_macro_input, Token};
 
 struct Seq{
+    number: Ident,
+    start: LitInt,
+    end: LitInt,
+    body: TokenStream,
 }
 
 impl Parse for Seq{
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let _number: Ident = input.parse()?;
+        let number: Ident = input.parse()?;
         let _ = input.parse::<Token![in]>()?;
-        let _start: LitInt = input.parse()?;
+        let start: LitInt = input.parse()?;
         let _ = input.parse::<Token![..]>()?;
-        let _end: LitInt = input.parse()?;
-        let _ = input.parse::<Token![..]>()?;
-        let _: Expr = input.parse()?;
+        let end: LitInt = input.parse()?;
 
-        Ok(Seq{})
+        let body;
+        braced!(body in input);
+
+        let body: TokenStream = body.parse()?;
+
+        Ok(Seq{
+            number,
+            start,
+            end,
+            body
+        })
     }
 }
 
