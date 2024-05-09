@@ -16,10 +16,14 @@ impl Seq {
         tokens.into_iter().map(|node| {
             match node {
                 TokenTree::Ident(ident) if ident.to_string() == self.number.to_string() => {
-                    TokenTree::Literal(Literal::isize_unsuffixed(n))
+                    let mut lit = Literal::isize_unsuffixed(n);
+                    lit.set_span(ident.span());
+                    TokenTree::Literal(lit)
                 },
                 TokenTree::Group(group) =>{
-                    TokenTree::Group(Group::new(group.delimiter(), self.replace_number(group.stream(), n)))
+                    let mut new_group = Group::new(group.delimiter(), self.replace_number(group.stream(), n));
+                    new_group.set_span(group.span());
+                    TokenTree::Group(new_group)
                 }
                 _ => node
             }
