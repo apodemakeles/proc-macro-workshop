@@ -1,12 +1,40 @@
-use proc_macro2::{Ident, TokenStream};
+#![feature(proc_macro_diagnostic)]
+
+use proc_macro2::{Group, Ident, Literal, TokenStream, TokenTree};
+use syn::{braced, LitInt, parse_macro_input, Token};
 use syn::parse::{Parse, ParseStream};
-use syn::{braced, Expr, LitInt, parse_macro_input, Token};
 
 struct Seq{
     number: Ident,
-    start: LitInt,
-    end: LitInt,
+    start: isize,
+    end: isize,
     body: TokenStream,
+}
+
+impl Seq {
+    fn replace_N(tokens: TokenStream, n: isize) -> TokenStream {
+        tokens.into_iter().map(|node| {
+            match node {
+                TokenTree::Ident(ident) if ident.to_string() == "N" => {
+                    TokenTree::Literal(Literal::isize_unsuffixed(n))
+                },
+                TokenTree::Group(group) =>{
+                    TokenTree::Group(Group::new(group.delimiter(), Seq::replace_N(group.stream(), n)))
+                }
+                _ => node
+            }
+        }).collect()
+    }
+
+    fn expand(&self) -> TokenStream{
+        let mut result = TokenStream::new();
+        for i in self.start..self.end {
+            let body = Seq::replace_N(self.body.clone(), i);
+            result.extend(body);
+        }
+
+        result
+    }
 }
 
 impl Parse for Seq{
@@ -24,8 +52,8 @@ impl Parse for Seq{
 
         Ok(Seq{
             number,
-            start,
-            end,
+            start: start.base10_parse()?,
+            end: end.base10_parse()?,
             body
         })
     }
@@ -34,6 +62,5 @@ impl Parse for Seq{
 #[proc_macro]
 pub fn seq(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as Seq);
-
-    proc_macro::TokenStream::new()
+    input.expand().into()
 }
