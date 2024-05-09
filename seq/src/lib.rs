@@ -1,4 +1,4 @@
-#![feature(proc_macro_diagnostic)]
+// #![feature(proc_macro_diagnostic)]
 
 use proc_macro2::{Group, Ident, Literal, TokenStream, TokenTree};
 use syn::{braced, LitInt, parse_macro_input, Token};
@@ -12,14 +12,14 @@ struct Seq{
 }
 
 impl Seq {
-    fn replace_N(tokens: TokenStream, n: isize) -> TokenStream {
+    fn replace_number(&self, tokens: TokenStream, n: isize) -> TokenStream {
         tokens.into_iter().map(|node| {
             match node {
-                TokenTree::Ident(ident) if ident.to_string() == "N" => {
+                TokenTree::Ident(ident) if ident.to_string() == self.number.to_string() => {
                     TokenTree::Literal(Literal::isize_unsuffixed(n))
                 },
                 TokenTree::Group(group) =>{
-                    TokenTree::Group(Group::new(group.delimiter(), Seq::replace_N(group.stream(), n)))
+                    TokenTree::Group(Group::new(group.delimiter(), self.replace_number(group.stream(), n)))
                 }
                 _ => node
             }
@@ -29,7 +29,7 @@ impl Seq {
     fn expand(&self) -> TokenStream{
         let mut result = TokenStream::new();
         for i in self.start..self.end {
-            let body = Seq::replace_N(self.body.clone(), i);
+            let body = self.replace_number(self.body.clone(), i);
             result.extend(body);
         }
 
