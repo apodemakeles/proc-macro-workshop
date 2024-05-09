@@ -16,9 +16,7 @@ impl Seq {
         tokens.into_iter().map(|node| {
             match node {
                 TokenTree::Ident(ident) if ident.to_string() == self.number.to_string() => {
-                    let mut lit = Literal::isize_unsuffixed(n);
-                    lit.set_span(ident.span());
-                    TokenTree::Literal(lit)
+                    TokenTree::Literal(Literal::isize_unsuffixed(n))
                 },
                 TokenTree::Group(group) =>{
                     let mut new_group = Group::new(group.delimiter(), self.replace_number(group.stream(), n));
