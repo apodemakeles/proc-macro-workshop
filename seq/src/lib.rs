@@ -1,47 +1,209 @@
-// #![feature(proc_macro_diagnostic)]
-
-use proc_macro2::{Group, Ident, Literal, TokenStream, TokenTree};
+use std::process::id;
+use proc_macro2::{Group, Ident, Literal, Punct, Span, TokenStream, TokenTree};
 use syn::{braced, LitInt, parse_macro_input, Token};
 use syn::parse::{Parse, ParseStream};
+use syn::spanned::Spanned;
 
 struct Seq{
-    number: Ident,
+    number: String,
     start: isize,
     end: isize,
     body: TokenStream,
 }
 
-impl Seq {
-    fn replace_number(&self, tokens: TokenStream, n: isize) -> TokenStream {
-        tokens.into_iter().map(|node| {
-            match node {
-                TokenTree::Ident(ident) if ident.to_string() == self.number.to_string() => {
-                    TokenTree::Literal(Literal::isize_unsuffixed(n))
-                },
-                TokenTree::Group(group) =>{
-                    let mut new_group = Group::new(group.delimiter(), self.replace_number(group.stream(), n));
-                    new_group.set_span(group.span());
-                    TokenTree::Group(new_group)
-                }
-                _ => node
-            }
-        }).collect()
+enum StateStep{
+    PrefixTilde,
+    Number,
+    SuffixTilde,
+    Full
+}
+
+struct ReplaceContext {
+    number: String,
+    step: StateStep,
+    name: String,
+    span: Span,
+    lit: bool,
+}
+
+impl ReplaceContext {
+
+    fn from_number_ident(number_ident: &Ident, n: isize) -> ReplaceContext{
+        ReplaceContext{
+            number: number_ident.to_string(),
+            step: StateStep::Number,
+            name: n.to_string(),
+            span: number_ident.span(),
+            lit: true,
+        }
     }
 
-    fn expand(&self) -> TokenStream{
-        let mut result = TokenStream::new();
-        for i in self.start..self.end {
-            let body = self.replace_number(self.body.clone(), i);
-            result.extend(body);
+    fn from_prefix_idents(number: &str, ident: &Ident, _tilde: &Punct) -> ReplaceContext{
+        ReplaceContext{
+            number: number.to_string(),
+            step: StateStep::PrefixTilde,
+            name: ident.to_string(),
+            span: ident.span(),
+            lit: false
         }
+    }
 
-        result
+    fn push_number(&mut self, _number_ident: &Ident, n: isize){
+        self.step = StateStep::Number;
+        // self.span = self.span.join(number_ident.span()).unwrap();
+        self.name.push_str(&n.to_string());
+    }
+
+    fn push_suffix_tilde(&mut self, suffix_tilde: &Punct){
+        self.step = StateStep::SuffixTilde;
+        // self.span = self.span.join(suffix_tilde.span()).unwrap();
+        self.lit = false;
+    }
+
+    fn push_suffix_ident(&mut self, suffix_ident: &Ident){
+        self.step = StateStep::Full;
+        // self.span = self.span.join(suffix_ident.span()).unwrap();
+        self.lit = false;
+        self.name.push_str(&suffix_ident.to_string());
     }
 }
 
+impl TryFrom<ReplaceContext> for TokenTree{
+    type Error = syn::Error;
+
+    fn try_from(ctx: ReplaceContext) -> Result<Self, Self::Error> {
+        return match ctx.step{
+            StateStep::Number =>{
+                if ctx.lit {
+                    let mut lit = Literal::isize_unsuffixed(isize::from_str_radix(&ctx.name, 10).unwrap());
+                    lit.set_span(ctx.span);
+                    Ok(TokenTree::Literal(lit))
+                }else{
+                    Ok(TokenTree::Ident(Ident::new(&ctx.name, ctx.span)))
+                }
+            },
+            StateStep::Full =>{
+                Ok(TokenTree::Ident(Ident::new(&ctx.name, ctx.span)))
+            },
+            StateStep::PrefixTilde =>{
+                Err(syn::Error::new(ctx.span, format!("must be followed with a(n) {}", ctx.number)))
+            }
+            StateStep::SuffixTilde=>{
+                Err(syn::Error::new(ctx.span, "must be followed with identity"))
+            }
+        }
+    }
+}
+
+impl Seq {
+    fn replace_number(&self, tokens: TokenStream, n: isize) -> syn::Result<TokenStream> {
+        let nodes = tokens.into_iter().collect::<Vec<_>>();
+        let mut i = 0usize;
+        let mut result: Vec<TokenTree> = vec![];
+        while i < nodes.len() {
+            let node = &nodes[i];
+            match node {
+                TokenTree::Punct(tilde) if tilde.to_string() == "~" => {
+                    if result.len() == 0 {
+                        return Err(syn::Error::new(node.span(), "before ~ must be a identity"));
+                    }
+                    result.remove(result.len() - 1);
+                    let pre_node = &nodes[i - 1];
+                    if let TokenTree::Ident(ref ident) = pre_node {
+                        let ctx = ReplaceContext::from_prefix_idents(&self.number, ident, tilde);
+                        i += 1;
+                        let new_node = self.expand_number(&nodes, ctx, &mut i, n)?;
+                        result.push(new_node);
+                    } else {
+                        return Err(syn::Error::new(node.span(), "before ~ must be a identity"));
+                    }
+                },
+                TokenTree::Ident(number_ident)  if number_ident.to_string() == self.number => {
+                    let ctx = ReplaceContext::from_number_ident(number_ident, n);
+                    i += 1;
+                    let new_node = self.expand_number(&nodes, ctx, &mut i, n)?;
+                    result.push(new_node);
+                },
+                TokenTree::Group(group) => {
+                    let mut new_group = Group::new(group.delimiter(), self.replace_number(group.stream(), n)?);
+                    new_group.set_span(group.span());
+                    result.push(TokenTree::Group(new_group));
+                    i += 1;
+                },
+                _ => {
+                    result.push(node.clone());
+                    i += 1;
+                }
+            }
+        }
+
+        Ok(convert_token_trees_to_stream(result))
+    }
+
+    fn expand_number(&self, nodes: &Vec<TokenTree>, mut ctx: ReplaceContext, idx: &mut usize, n: isize) -> syn::Result<TokenTree> {
+        while *idx < nodes.len() {
+            let node = &nodes[*idx];
+            match ctx.step {
+                StateStep::PrefixTilde => {
+                    if let TokenTree::Ident(number_ident) = node {
+                        if number_ident.to_string() == self.number {
+                            ctx.push_number(number_ident, n);
+                            *idx += 1;
+                            continue;
+                        }
+                    }
+                    return Err(syn::Error::new(node.span(), format!("must be {}", self.number)));
+                },
+                StateStep::Number => {
+                    if let TokenTree::Punct(punct) = node {
+                        if punct.to_string() == "~" {
+                            ctx.push_suffix_tilde(punct);
+                            *idx += 1;
+                            continue;
+                        }
+                    }
+                    return ctx.try_into();
+                },
+                StateStep::SuffixTilde => {
+                    if let TokenTree::Ident(suffix_ident) = node {
+                        ctx.push_suffix_ident(suffix_ident);
+                        *idx += 1;
+                        continue;
+                    }
+                    return Err(syn::Error::new(node.span(), "must be a identity"));
+                },
+                StateStep::Full => return ctx.try_into()
+            }
+        }
+
+        ctx.try_into()
+    }
+
+    fn expand(&self) -> syn::Result<TokenStream>{
+        let mut result = TokenStream::new();
+        for i in self.start..self.end {
+            let body = self.replace_number(self.body.clone(), i)?;
+            result.extend(body);
+        }
+
+        Ok(result)
+    }
+}
+
+fn convert_token_trees_to_stream(token_trees: Vec<TokenTree>) -> TokenStream {
+    let mut token_stream = TokenStream::new();
+
+    for token_tree in token_trees {
+        token_stream.extend(Some::<TokenStream>(token_tree.into()));
+    }
+
+    token_stream
+}
+
+
 impl Parse for Seq{
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let number: Ident = input.parse()?;
+        let number = input.parse::<Ident>()?.to_string();
         let _ = input.parse::<Token![in]>()?;
         let start: LitInt = input.parse()?;
         let _ = input.parse::<Token![..]>()?;
@@ -64,5 +226,12 @@ impl Parse for Seq{
 #[proc_macro]
 pub fn seq(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as Seq);
-    input.expand().into()
+    match input.expand() {
+        Ok(tokens) => {
+            tokens
+        }
+        Err(err) => {
+            err.into_compile_error()
+        }
+    }.into()
 }
