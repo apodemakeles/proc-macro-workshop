@@ -1,5 +1,6 @@
+use std::mem;
 use std::process::id;
-use proc_macro2::{Group, Ident, Literal, Punct, Span, TokenStream, TokenTree};
+use proc_macro2::{Delimiter, Group, Ident, Literal, Punct, Span, TokenStream, TokenTree};
 use syn::{braced, LitInt, parse_macro_input, Token};
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
@@ -179,14 +180,89 @@ impl Seq {
         ctx.try_into()
     }
 
-    fn expand(&self) -> syn::Result<TokenStream>{
+    fn expand_body(&self, tokens: TokenStream) -> syn::Result<(TokenStream, bool)>{
+        let buffer = syn::buffer::TokenBuffer::new2(tokens);
+        let mut cursor = buffer.begin();
+        let mut found = false;
+        let mut result = Tokens::default();
+
+        while !cursor.eof() {
+            if let Some((punct, next_cursor)) = cursor.punct() {
+                if punct.as_char() == '#' {
+                    if let Some((group_begin, _, group_end)) = next_cursor.group(Delimiter::Parenthesis){
+                        if let Some((punct, next_cursor)) = group_end.punct(){
+                            if punct.as_char() == '*'{
+                                found = true;
+                                cursor = next_cursor;
+                                result.extend(self.expand_content(&group_begin.token_stream())?);
+                                // eprintln!("{:#?}", group_begin.token_stream());
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some((node, next_cursor)) = cursor.token_tree(){
+                match node{
+                    TokenTree::Group(group)=>{
+                        let (group_stream, found2) = self.expand_body(group.stream())?;
+                        let mut new_group = Group::new(group.delimiter(), group_stream);
+                        new_group.set_span(group.span());
+                        result.push(TokenTree::Group(new_group));
+                        found = found || found2;
+                    },
+                    _ => result.push(node),
+                }
+                cursor = next_cursor;
+            }else{
+                unreachable!()
+            }
+        }
+
+        Ok((result.into(), found))
+    }
+
+
+    fn expand_content(&self, content: &TokenStream) -> syn::Result<TokenStream>{
         let mut result = TokenStream::new();
         for i in self.start..self.end {
-            let body = self.replace_number(self.body.clone(), i)?;
+            let body = self.replace_number(content.clone(), i)?;
             result.extend(body);
         }
 
         Ok(result)
+    }
+}
+
+#[derive(Default)]
+struct Tokens {
+    inner: TokenStream,
+    nodes: Vec<TokenTree>
+}
+
+impl Tokens{
+    fn push(&mut self, node: TokenTree){
+        self.nodes.push(node);
+    }
+
+    fn flush(&mut self){
+        if !self.nodes.is_empty(){
+            let nodes = mem::take(&mut self.nodes);
+            self.inner.extend(convert_token_trees_to_stream(nodes));
+        }
+    }
+
+    fn extend(&mut self, token_stream: TokenStream){
+        self.flush();
+        self.inner.extend(token_stream);
+    }
+}
+
+impl From<Tokens> for TokenStream{
+    fn from(mut tokens: Tokens) -> Self {
+        tokens.flush();
+        tokens.inner
     }
 }
 
@@ -226,10 +302,11 @@ impl Parse for Seq{
 #[proc_macro]
 pub fn seq(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as Seq);
-    match input.expand() {
-        Ok(tokens) => {
-            tokens
-        }
+    match input.expand_body(input.body.clone()) {
+        Ok((tokens, true)) => tokens,
+        Ok((_, false))=>{
+            input.expand_content(&input.body).unwrap_or_else(|err| err.into_compile_error())
+        },
         Err(err) => {
             err.into_compile_error()
         }
