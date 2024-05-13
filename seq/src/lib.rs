@@ -1,5 +1,5 @@
 use std::mem;
-use std::process::id;
+
 use proc_macro2::{Delimiter, Group, Ident, Literal, Punct, Span, TokenStream, TokenTree};
 use syn::{braced, LitInt, parse_macro_input, Token};
 use syn::parse::{Parse, ParseStream};
@@ -196,7 +196,6 @@ impl Seq {
                                 found = true;
                                 cursor = next_cursor;
                                 result.extend(self.expand_content(&group_begin.token_stream())?);
-                                // eprintln!("{:#?}", group_begin.token_stream());
                                 continue;
                             }
                         }
