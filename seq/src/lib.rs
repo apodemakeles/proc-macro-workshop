@@ -9,6 +9,7 @@ struct Seq{
     number: String,
     start: isize,
     end: isize,
+    inclusive: bool,
     body: TokenStream,
 }
 
@@ -226,9 +227,16 @@ impl Seq {
 
     fn expand_content(&self, content: &TokenStream) -> syn::Result<TokenStream>{
         let mut result = TokenStream::new();
-        for i in self.start..self.end {
-            let body = self.replace_number(content.clone(), i)?;
-            result.extend(body);
+        if self.inclusive{
+            for i in self.start..=self.end {
+                let body = self.replace_number(content.clone(), i)?;
+                result.extend(body);
+            }
+        }else{
+            for i in self.start..self.end {
+                let body = self.replace_number(content.clone(), i)?;
+                result.extend(body);
+            }
         }
 
         Ok(result)
@@ -283,6 +291,7 @@ impl Parse for Seq{
         let _ = input.parse::<Token![in]>()?;
         let start: LitInt = input.parse()?;
         let _ = input.parse::<Token![..]>()?;
+        let inclusive = input.parse::<Token![=]>().ok().is_some();
         let end: LitInt = input.parse()?;
 
         let body;
@@ -294,6 +303,7 @@ impl Parse for Seq{
             number,
             start: start.base10_parse()?,
             end: end.base10_parse()?,
+            inclusive,
             body
         })
     }
