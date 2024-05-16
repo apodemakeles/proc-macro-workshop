@@ -1,15 +1,77 @@
-use proc_macro2::{Ident, TokenStream};
+use proc_macro2::{Span, TokenStream};
 use quote::quote;
-use syn::{Arm, Attribute, Error, ExprMatch, Item, ItemFn, Meta, parse_macro_input, Pat};
+use syn::{Arm, Attribute, ExprMatch, Item, ItemFn, Meta, parse_macro_input, Pat, Path, PathSegment};
 use syn::spanned::Spanned;
 use syn::visit_mut::VisitMut;
+
+fn remove_sorted_attr(attrs: &[Attribute]) -> Vec<Attribute>{
+    attrs.iter().filter(|attr|{
+        match &attr.meta {
+            Meta::Path(path)=>{
+                if let Some(ident) = path.get_ident(){
+                    if ident.to_string() == "sorted"{
+                        return false
+                    }
+                }
+            }
+            _=>{}
+        }
+        true
+    }).map(Attribute::clone).collect()
+}
+
+#[derive(Debug, Clone)]
+struct Entry{
+    name: String,
+    span: Span
+}
+
+#[derive(Debug, Clone)]
+struct PathEntry<'a>{
+    name: String,
+    path: &'a Path,
+}
+
+fn check_order(entries: Vec<Entry>)-> syn::Result<()> {
+    if entries.is_empty(){
+        return Ok(());
+    }
+    let mut sorted = entries.clone();
+    sorted.sort_by(|e1, e2| e1.name.cmp(&e2.name));
+    eprintln!("{:?}", sorted);
+    for (a, b) in entries.iter().zip(sorted.iter()) {
+        if a.name != b.name{
+            let msg = format!("{} should sort before {}", b.name, a.name);
+            return Err(syn::Error::new(b.span, msg));
+        }
+    }
+
+    Ok(())
+}
+
+fn check_path_order(entries: Vec<PathEntry>)-> syn::Result<()> {
+    if entries.is_empty(){
+        return Ok(());
+    }
+    let mut sorted = entries.clone();
+    sorted.sort_by(|e1, e2| e1.name.cmp(&e2.name));
+    eprintln!("{:?}", sorted);
+    for (a, b) in entries.iter().zip(sorted.iter()) {
+        if a.name != b.name{
+            let msg = format!("{} should sort before {}", b.name, a.name);
+            return Err(syn::Error::new_spanned(b.path, msg));
+        }
+    }
+
+    Ok(())
+}
 
 fn check_enum_order(args: &TokenStream, input: &Item) -> syn::Result<()>{
     let mut idents = vec![];
     match input{
         Item::Enum(ref item) =>{
             for variant in item.variants.iter() {
-                idents.push(&variant.ident);
+                idents.push(Entry{name: variant.ident.to_string(), span: variant.span()});
             }
             check_order(idents)
         },
@@ -17,22 +79,6 @@ fn check_enum_order(args: &TokenStream, input: &Item) -> syn::Result<()>{
             Err(syn::Error::new(args.span(), "expected enum or match expression"))
         }
     }
-}
-
-fn check_order(idents: Vec<&Ident>)-> syn::Result<()> {
-    if idents.is_empty(){
-        return Ok(());
-    }
-    let mut sorted = idents.clone();
-    sorted.sort_by(|ident1, ident2| ident1.cmp(ident2));
-    for (a, b) in idents.iter().zip(sorted.iter()) {
-        if a.to_string() != b.to_string(){
-            let msg = format!("{} should sort before {}", b.to_string(), a.to_string());
-            return Err(syn::Error::new(b.span(), msg));
-        }
-    }
-
-    Ok(())
 }
 
 
@@ -64,27 +110,26 @@ impl VisitMut for ItemFnVisitor{
         let attrs = remove_sorted_attr(&expr.attrs);
         if expr.attrs.len() != attrs.len(){
             expr.attrs = attrs;
-            let idents = extract_arm_idents(&expr.arms);
-            if let Err(error) = check_order(idents){
+            let entries = extract_arm_idents(&expr.arms);
+            if let Err(error) = check_path_order(entries){
                 self.error = Some(error);
             }
         }
     }
 }
 
-fn extract_arm_idents(arms: &Vec<Arm>) -> Vec<&Ident> {
+fn extract_arm_idents(arms: &Vec<Arm>) -> Vec<PathEntry> {
     let mut result = vec![];
     for arm in arms {
         match &arm.pat {
             Pat::Path(pat_path) => {
-                if let Some(ident) = pat_path.path.get_ident() {
-                    result.push(ident);
+                result.push(PathEntry{name: path_to_string(&pat_path.path), path: &pat_path.path});
+
+                if let Some(PathSegment { ident, .. }) = pat_path.path.segments.last() {
                 }
             }
             Pat::TupleStruct(pat_tuple) => {
-                if let Some(ident) = pat_tuple.path.get_ident() {
-                    result.push(ident);
-                }
+                result.push(PathEntry{name: path_to_string(&pat_tuple.path), path: &pat_tuple.path});
             }
             _ => {}
         }
@@ -92,20 +137,11 @@ fn extract_arm_idents(arms: &Vec<Arm>) -> Vec<&Ident> {
     result
 }
 
-fn remove_sorted_attr(attrs: &[Attribute]) -> Vec<Attribute>{
-    attrs.iter().filter(|attr|{
-        match &attr.meta {
-            Meta::Path(path)=>{
-                if let Some(ident) = path.get_ident(){
-                    if ident.to_string() == "sorted"{
-                        return false
-                    }
-                }
-            }
-            _=>{}
-        }
-        true
-    }).map(Attribute::clone).collect()
+fn path_to_string(path: &Path)-> String{
+    path.segments.iter().
+        map(|segment|segment.ident.to_string()).
+        collect::<Vec<_>>().
+        join("::")
 }
 
 #[proc_macro_attribute]
