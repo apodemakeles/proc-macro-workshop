@@ -1,6 +1,6 @@
 use proc_macro2::{Span, TokenStream};
-use quote::quote;
-use syn::{Arm, Attribute, ExprMatch, Item, ItemFn, Meta, parse_macro_input, Pat, Path, PathSegment};
+use quote::{quote, ToTokens};
+use syn::{Arm, Attribute, ExprMatch, Item, ItemFn, Meta, parse_macro_input, Pat, Path};
 use syn::spanned::Spanned;
 use syn::visit_mut::VisitMut;
 
@@ -26,10 +26,10 @@ struct Entry{
     span: Span
 }
 
-#[derive(Debug, Clone)]
-struct PathEntry<'a>{
+#[derive(Clone)]
+struct TokenEntry<'a>{
     name: String,
-    path: &'a Path,
+    tokens: &'a dyn ToTokens,
 }
 
 fn check_order(entries: Vec<Entry>)-> syn::Result<()> {
@@ -49,17 +49,16 @@ fn check_order(entries: Vec<Entry>)-> syn::Result<()> {
     Ok(())
 }
 
-fn check_path_order(entries: Vec<PathEntry>)-> syn::Result<()> {
+fn check_path_order(entries: Vec<TokenEntry>)-> syn::Result<()> {
     if entries.is_empty(){
         return Ok(());
     }
     let mut sorted = entries.clone();
     sorted.sort_by(|e1, e2| e1.name.cmp(&e2.name));
-    eprintln!("{:?}", sorted);
     for (a, b) in entries.iter().zip(sorted.iter()) {
         if a.name != b.name{
             let msg = format!("{} should sort before {}", b.name, a.name);
-            return Err(syn::Error::new_spanned(b.path, msg));
+            return Err(syn::Error::new_spanned(b.tokens, msg));
         }
     }
 
@@ -121,18 +120,24 @@ impl VisitMut for ItemFnVisitor {
     }
 }
 
-fn extract_arm_idents(arms: &Vec<Arm>) -> syn::Result<Vec<PathEntry>> {
+fn extract_arm_idents(arms: &Vec<Arm>) -> syn::Result<Vec<TokenEntry>> {
     let mut result = vec![];
     for arm in arms {
         match &arm.pat {
             Pat::Path(pat_path) => {
-                result.push(PathEntry{name: path_to_string(&pat_path.path), path: &pat_path.path});
+                result.push(TokenEntry{name: path_to_string(&pat_path.path), tokens: &pat_path.path});
             }
             Pat::TupleStruct(pat_tuple) => {
-                result.push(PathEntry{name: path_to_string(&pat_tuple.path), path: &pat_tuple.path});
+                result.push(TokenEntry{name: path_to_string(&pat_tuple.path), tokens: &pat_tuple.path});
             }
             Pat::Struct(pat_struct)=>{
-                result.push(PathEntry { name: path_to_string(&pat_struct.path), path: &pat_struct.path });
+                result.push(TokenEntry { name: path_to_string(&pat_struct.path), tokens: &pat_struct.path });
+            },
+            Pat::Ident(pat_ident)=>{
+                result.push(TokenEntry { name: pat_ident.ident.to_string(), tokens: &pat_ident.ident });
+            }
+            Pat::Wild(pat_wild)=>{
+                result.push(TokenEntry{name: "_".to_string(), tokens: &pat_wild.underscore_token});
             }
             _ => {
                 return Err(syn::Error::new(arm.span(), "unsupported by #[sorted]"));
