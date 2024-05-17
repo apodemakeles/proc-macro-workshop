@@ -102,39 +102,44 @@ struct ItemFnVisitor{
     error: Option<syn::Error>
 }
 
-impl VisitMut for ItemFnVisitor{
+impl VisitMut for ItemFnVisitor {
     fn visit_expr_match_mut(&mut self, expr: &mut ExprMatch) {
-        if self.error.is_some(){
+        if self.error.is_some() {
             return;
         }
         let attrs = remove_sorted_attr(&expr.attrs);
-        if expr.attrs.len() != attrs.len(){
+        if expr.attrs.len() != attrs.len() {
             expr.attrs = attrs;
-            let entries = extract_arm_idents(&expr.arms);
-            if let Err(error) = check_path_order(entries){
-                self.error = Some(error);
+            let result = match extract_arm_idents(&expr.arms) {
+                Ok(entries) => check_path_order(entries),
+                Err(err) => Err(err)
+            };
+            if let Err(err) = result {
+                self.error = Some(err);
             }
         }
     }
 }
 
-fn extract_arm_idents(arms: &Vec<Arm>) -> Vec<PathEntry> {
+fn extract_arm_idents(arms: &Vec<Arm>) -> syn::Result<Vec<PathEntry>> {
     let mut result = vec![];
     for arm in arms {
         match &arm.pat {
             Pat::Path(pat_path) => {
                 result.push(PathEntry{name: path_to_string(&pat_path.path), path: &pat_path.path});
-
-                if let Some(PathSegment { ident, .. }) = pat_path.path.segments.last() {
-                }
             }
             Pat::TupleStruct(pat_tuple) => {
                 result.push(PathEntry{name: path_to_string(&pat_tuple.path), path: &pat_tuple.path});
             }
-            _ => {}
+            Pat::Struct(pat_struct)=>{
+                result.push(PathEntry { name: path_to_string(&pat_struct.path), path: &pat_struct.path });
+            }
+            _ => {
+                return Err(syn::Error::new(arm.span(), "unsupported by #[sorted]"));
+            }
         }
     }
-    result
+    Ok(result)
 }
 
 fn path_to_string(path: &Path)-> String{
